@@ -70,10 +70,9 @@ impl MultiFastaReader {
                 unsafe { libc::free(seq.as_ptr() as *mut std::ffi::c_void) };
                 seq_vec
             })?;
-        
+
         // Convert to String
-        String::from_utf8(seq_vec)
-            .context("Failed to convert sequence to UTF-8 string")
+        String::from_utf8(seq_vec).context("Failed to convert sequence to UTF-8 string")
     }
 }
 

@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use clap::{App, Arg};
+use indicatif::{ProgressBar, ProgressStyle};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::thread;
 use std::sync::Arc;
-use indicatif::{ProgressBar, ProgressStyle};
+use std::thread;
 
 use pafcheck::fasta_reader::MultiFastaReader;
 use pafcheck::paf_parser::PafRecord;
@@ -68,9 +68,10 @@ fn main() {
     let target_fasta_path = matches.value_of("target_fasta").unwrap_or(query_fasta_path);
     let paf_path = matches.value_of("paf").unwrap();
     let error_mode = matches.value_of("error-mode").unwrap();
-    
+
     let num_threads = if let Some(threads_str) = matches.value_of("threads") {
-        threads_str.parse::<usize>()
+        threads_str
+            .parse::<usize>()
             .context("Invalid number of threads")
             .unwrap_or_else(|e| {
                 eprintln!("[pafcheck] Error: {}", e);
@@ -79,10 +80,22 @@ fn main() {
     } else {
         if std::thread::available_parallelism()
             .map(|n| n.get())
-            .unwrap_or(1) >= 4 { 4 } else { 1 }
+            .unwrap_or(1)
+            >= 4
+        {
+            4
+        } else {
+            1
+        }
     };
 
-    if let Err(e) = validate_paf(query_fasta_path, target_fasta_path, paf_path, error_mode, num_threads) {
+    if let Err(e) = validate_paf(
+        query_fasta_path,
+        target_fasta_path,
+        paf_path,
+        error_mode,
+        num_threads,
+    ) {
         eprintln!("[pafcheck] Error: {}", e);
         std::process::exit(1);
     }
@@ -104,20 +117,26 @@ fn validate_paf(
     // Read all PAF lines into memory with line numbers
     let paf_file = File::open(paf_path).context("Failed to open PAF file")?;
     let reader = BufReader::new(paf_file);
-    
+
     println!("[pafcheck] Reading PAF file...");
-    let lines: Result<Vec<_>> = reader.lines().enumerate().map(|(i, line)| {
-        line.context("Failed to read PAF line").map(|l| (i + 1, l))
-    }).collect();
+    let lines: Result<Vec<_>> = reader
+        .lines()
+        .enumerate()
+        .map(|(i, line)| line.context("Failed to read PAF line").map(|l| (i + 1, l)))
+        .collect();
     let lines = lines?;
-    
+
     if lines.is_empty() {
         println!("[pafcheck] PAF file is empty. No validation needed.");
         return Ok(());
     }
-    
-    println!("[pafcheck] Processing {} PAF records using {} threads", lines.len(), num_threads);
-    
+
+    println!(
+        "[pafcheck] Processing {} PAF records using {} threads",
+        lines.len(),
+        num_threads
+    );
+
     // Create progress bar
     let progress_bar = Arc::new(ProgressBar::new(lines.len() as u64));
     progress_bar.set_style(
@@ -126,36 +145,39 @@ fn validate_paf(
             .unwrap()
             .progress_chars("#>-")
     );
-    
+
     // Determine chunk size
     let chunk_size = (lines.len() + num_threads - 1) / num_threads;
-    
+
     // Process chunks in parallel using scoped threads
     let results: Result<Vec<ThreadResult>> = thread::scope(|s| {
-        let handles: Vec<_> = lines.chunks(chunk_size).map(|chunk| {
-            let chunk = chunk.to_vec();
-            let query_fasta = query_fasta.to_string();
-            let target_fasta = target_fasta.to_string();
-            let error_mode = error_mode.to_string();
-            let progress = Arc::clone(&progress_bar);
-            
-            s.spawn(move || -> Result<ThreadResult> {
-                process_chunk(&query_fasta, &target_fasta, &error_mode, chunk, progress)
+        let handles: Vec<_> = lines
+            .chunks(chunk_size)
+            .map(|chunk| {
+                let chunk = chunk.to_vec();
+                let query_fasta = query_fasta.to_string();
+                let target_fasta = target_fasta.to_string();
+                let error_mode = error_mode.to_string();
+                let progress = Arc::clone(&progress_bar);
+
+                s.spawn(move || -> Result<ThreadResult> {
+                    process_chunk(&query_fasta, &target_fasta, &error_mode, chunk, progress)
+                })
             })
-        }).collect();
-        
+            .collect();
+
         handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
-    
+
     progress_bar.finish_with_message("Validation complete");
-    
+
     let results = results?;
-    
+
     // Aggregate results
     let mut total_error_count = 0;
     let mut error_type_counts: HashMap<ErrorType, usize> = HashMap::new();
     let mut all_error_messages = Vec::new();
-    
+
     for result in results {
         total_error_count += result.error_count;
         for (error_type, count) in result.error_type_counts {
@@ -163,19 +185,19 @@ fn validate_paf(
         }
         all_error_messages.extend(result.error_messages);
     }
-    
+
     // Sort error messages by line number (extract line number from message)
     all_error_messages.sort_by(|a, b| {
         let line_a = extract_line_number(a).unwrap_or(0);
         let line_b = extract_line_number(b).unwrap_or(0);
         line_a.cmp(&line_b)
     });
-    
+
     // Print all error messages in order
     for message in all_error_messages {
         println!("{}", message);
     }
-    
+
     // Print summary
     if total_error_count > 0 {
         println!("[pafcheck] PAF validation completed with errors:");
@@ -199,18 +221,18 @@ fn process_chunk(
 ) -> Result<ThreadResult> {
     let mut fasta_reader = MultiFastaReader::new(query_fasta, target_fasta)
         .context("Failed to create FASTA readers")?;
-    
+
     let mut error_count = 0;
     let mut error_type_counts: HashMap<ErrorType, usize> = HashMap::new();
     let mut error_messages = Vec::new();
-    
+
     for (i, (line_number, line)) in chunk.iter().enumerate() {
         // Update progress
         if i % 100 == 0 {
             progress.inc(100.min(chunk.len() - i) as u64);
             progress.set_message(format!("Processing record {}", line_number));
         }
-        
+
         let record = PafRecord::from_line(&line).context(format!(
             "Failed to parse PAF record at line {}",
             line_number
@@ -225,9 +247,7 @@ fn process_chunk(
                     error_count += count;
                     error_messages.push(format!(
                         "[pafcheck] Error at line {}: {:?}: {}",
-                        line_number,
-                        error_type,
-                        error_info.first_message
+                        line_number, error_type, error_info.first_message
                     ));
                     if count > 1 {
                         error_messages.push(format!(
@@ -238,20 +258,17 @@ fn process_chunk(
                 }
             } else {
                 error_count += 1;
-                error_messages.push(format!(
-                    "[pafcheck] Error at line {}: {}",
-                    line_number, e
-                ));
+                error_messages.push(format!("[pafcheck] Error at line {}: {}", line_number, e));
             }
         }
     }
-    
+
     // Update progress for remaining items
     let remaining = chunk.len() % 100;
     if remaining > 0 {
         progress.inc(remaining as u64);
     }
-    
+
     Ok(ThreadResult {
         error_count,
         error_type_counts,
