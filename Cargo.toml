@@ -12,4 +12,6 @@ thiserror = "1.0"
 rust-htslib = { version = "0.46.0", default-features = false } # Don't update it, see https://github.com/rust-bio/rust-htslib/issues/434
 libc = "0.2.172"
 
+indicatif = "0.17.11"
+
 [dev-dependencies]
