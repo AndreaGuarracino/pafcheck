@@ -132,7 +132,7 @@ fn validate_paf(
     
     // Process chunks in parallel using scoped threads
     let results: Result<Vec<ThreadResult>> = thread::scope(|s| {
-        let handles: Vec<_> = lines.chunks(chunk_size).enumerate().map(|(chunk_idx, chunk)| {
+        let handles: Vec<_> = lines.chunks(chunk_size).map(|chunk| {
             let chunk = chunk.to_vec();
             let query_fasta = query_fasta.to_string();
             let target_fasta = target_fasta.to_string();
@@ -140,7 +140,7 @@ fn validate_paf(
             let progress = Arc::clone(&progress_bar);
             
             s.spawn(move || -> Result<ThreadResult> {
-                process_chunk(&query_fasta, &target_fasta, &error_mode, chunk, progress, chunk_idx)
+                process_chunk(&query_fasta, &target_fasta, &error_mode, chunk, progress)
             })
         }).collect();
         
@@ -196,7 +196,6 @@ fn process_chunk(
     error_mode: &str,
     chunk: Vec<(usize, String)>,
     progress: Arc<ProgressBar>,
-    chunk_idx: usize,
 ) -> Result<ThreadResult> {
     let mut fasta_reader = MultiFastaReader::new(query_fasta, target_fasta)
         .context("Failed to create FASTA readers")?;
@@ -209,10 +208,7 @@ fn process_chunk(
         // Update progress
         if i % 100 == 0 {
             progress.inc(100.min(chunk.len() - i) as u64);
-            if chunk_idx == 0 && i % 1000 == 0 {
-                // Only the first thread updates the message to avoid flickering
-                progress.set_message(format!("Processing record {}", line_number));
-            }
+            progress.set_message(format!("Processing record {}", line_number));
         }
         
         let record = PafRecord::from_line(&line).context(format!(
