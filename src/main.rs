@@ -77,16 +77,14 @@ fn main() {
                 eprintln!("[pafcheck] Error: {}", e);
                 std::process::exit(1);
             })
+    } else if std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        >= 4
+    {
+        4
     } else {
-        if std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1)
-            >= 4
-        {
-            4
-        } else {
-            1
-        }
+        1
     };
 
     if let Err(e) = validate_paf(
@@ -147,7 +145,7 @@ fn validate_paf(
     );
 
     // Determine chunk size
-    let chunk_size = (lines.len() + num_threads - 1) / num_threads;
+    let chunk_size = lines.len().div_ceil(num_threads);
 
     // Process chunks in parallel using scoped threads
     let results: Result<Vec<ThreadResult>> = thread::scope(|s| {
@@ -233,7 +231,7 @@ fn process_chunk(
             progress.set_message(format!("Processing record {}", line_number));
         }
 
-        let record = PafRecord::from_line(&line).context(format!(
+        let record = PafRecord::from_line(line).context(format!(
             "Failed to parse PAF record at line {}",
             line_number
         ))?;
