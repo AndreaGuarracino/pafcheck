@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader};
 use pafcheck::fasta_reader::MultiFastaReader;
 use pafcheck::paf_parser::PafRecord;
 use pafcheck::validator::{validate_record, ErrorType, ValidationError};
+use pafcheck::cigar_parser::{parse_cigar, CigarOp};
 
 fn main() {
     let matches = App::new("PAF Validator")
@@ -20,7 +21,7 @@ fn main() {
                 .value_name("QUERY_FASTA")
                 .help("Path to the bgzip-compressed and tabix-indexed query FASTA file")
                 .takes_value(true)
-                .required_unless("info"),
+                .required_unless_one(&["info", "coverage"]),
         )
         .arg(
             Arg::with_name("target_fasta")
@@ -57,6 +58,13 @@ fn main() {
                 .takes_value(false)
                 .required(false),
         )
+        .arg(
+            Arg::with_name("coverage")
+                .long("coverage")
+                .help("Show detailed coverage table for each query-target pair")
+                .takes_value(false)
+                .required(false),
+        )
         .get_matches();
 
     let query_fasta_path = matches.value_of("query_fasta");
@@ -64,9 +72,15 @@ fn main() {
     let paf_path = matches.value_of("paf").unwrap();
     let error_mode = matches.value_of("error-mode").unwrap();
     let show_info = matches.is_present("info");
+    let show_coverage = matches.is_present("coverage");
 
     if show_info {
         if let Err(e) = show_paf_info(paf_path) {
+            eprintln!("[pafcheck] Error: {}", e);
+            std::process::exit(1);
+        }
+    } else if show_coverage {
+        if let Err(e) = show_paf_coverage(paf_path) {
             eprintln!("[pafcheck] Error: {}", e);
             std::process::exit(1);
         }
@@ -77,6 +91,225 @@ fn main() {
             eprintln!("[pafcheck] Error: {}", e);
             std::process::exit(1);
         }
+    }
+}
+
+#[derive(Debug)]
+struct AlignmentPairStats {
+    query_name: String,
+    target_name: String,
+    alignments: Vec<AlignmentInfo>,
+    query_length: usize,
+    target_length: usize,
+}
+
+#[derive(Debug, Clone)]
+struct AlignmentInfo {
+    query_start: usize,
+    query_end: usize,
+    target_start: usize,
+    target_end: usize,
+    matching_bases: usize,
+    block_length: usize,
+    cigar: String,
+}
+
+fn show_paf_coverage(paf_path: &str) -> Result<()> {
+    let paf_file = File::open(paf_path).context("Failed to open PAF file")?;
+    let reader = BufReader::new(paf_file);
+
+    let mut pair_stats: HashMap<(String, String), AlignmentPairStats> = HashMap::new();
+
+    for (line_number, line) in reader.lines().enumerate() {
+        let line = line.context("Failed to read PAF line")?;
+        let record = PafRecord::from_line(&line).context(format!(
+            "Failed to parse PAF record at line {}",
+            line_number + 1
+        ))?;
+
+        let key = (record.query_name.clone(), record.target_name.clone());
+        
+        let alignment_info = AlignmentInfo {
+            query_start: record.query_start,
+            query_end: record.query_end,
+            target_start: record.target_start,
+            target_end: record.target_end,
+            matching_bases: record.matching_bases,
+            block_length: record.block_length,
+            cigar: record.cigar.clone(),
+        };
+
+        pair_stats.entry(key.clone())
+            .and_modify(|stats| stats.alignments.push(alignment_info.clone()))
+            .or_insert_with(|| AlignmentPairStats {
+                query_name: record.query_name.clone(),
+                target_name: record.target_name.clone(),
+                alignments: vec![alignment_info],
+                query_length: record.query_length,
+                target_length: record.target_length,
+            });
+    }
+
+    print_coverage_table(&pair_stats)?;
+    Ok(())
+}
+
+fn print_coverage_table(pair_stats: &HashMap<(String, String), AlignmentPairStats>) -> Result<()> {
+    // Print header
+    println!("{:<15} {:<15} {:<8} {:<10} {:<10} {:<10} {:<12} {:<12} {:<8} {:<12} {:<10} {:<12} {:<12}", 
+             "Query", "Target", "NumAlign", "MedianLen", "MeanLen", "StdLen", 
+             "QueryCov", "TargetCov", "Jaccard", "BPJaccard", "Identity", "GapCompId", "BlastId");
+    
+    for ((_query, _target), stats) in pair_stats {
+        let coverage_stats = calculate_pair_coverage_stats(stats)?;
+        
+        println!("{:<15} {:<15} {:<8} {:<10.1} {:<10.1} {:<10.1} {:<12.2} {:<12.2} {:<8.3} {:<12} {:<10.2} {:<12.2} {:<12.2}",
+                 stats.query_name,
+                 stats.target_name,
+                 coverage_stats.num_alignments,
+                 coverage_stats.median_length,
+                 coverage_stats.mean_length,
+                 coverage_stats.std_length,
+                 coverage_stats.query_coverage * 100.0,
+                 coverage_stats.target_coverage * 100.0,
+                 coverage_stats.jaccard,
+                 coverage_stats.bp_jaccard.map_or("NA".to_string(), |j| format!("{:.3}", j)),
+                 coverage_stats.identity * 100.0,
+                 coverage_stats.gap_compressed_identity * 100.0,
+                 coverage_stats.blast_identity * 100.0);
+    }
+    
+    Ok(())
+}
+
+#[derive(Debug)]
+struct PairCoverageStats {
+    num_alignments: usize,
+    median_length: f64,
+    mean_length: f64,
+    std_length: f64,
+    query_coverage: f64,
+    target_coverage: f64,
+    jaccard: f64,
+    bp_jaccard: Option<f64>,
+    identity: f64,
+    gap_compressed_identity: f64,
+    blast_identity: f64,
+}
+
+fn calculate_pair_coverage_stats(stats: &AlignmentPairStats) -> Result<PairCoverageStats> {
+    let num_alignments = stats.alignments.len();
+    
+    // Calculate length statistics
+    let lengths: Vec<usize> = stats.alignments.iter()
+        .map(|a| a.query_end - a.query_start)
+        .collect();
+    
+    let mean_length = lengths.iter().sum::<usize>() as f64 / lengths.len() as f64;
+    
+    let mut sorted_lengths = lengths.clone();
+    sorted_lengths.sort_unstable();
+    let median_length = if sorted_lengths.len() % 2 == 0 {
+        (sorted_lengths[sorted_lengths.len() / 2 - 1] + sorted_lengths[sorted_lengths.len() / 2]) as f64 / 2.0
+    } else {
+        sorted_lengths[sorted_lengths.len() / 2] as f64
+    };
+    
+    let std_length = if lengths.len() > 1 {
+        let variance = lengths.iter()
+            .map(|&l| (l as f64 - mean_length).powi(2))
+            .sum::<f64>() / (lengths.len() - 1) as f64;
+        variance.sqrt()
+    } else {
+        0.0
+    };
+    
+    // Calculate coverages
+    let query_covered = calculate_covered_bases(&stats.alignments.iter()
+        .map(|a| (a.query_start, a.query_end))
+        .collect::<Vec<_>>());
+    let target_covered = calculate_covered_bases(&stats.alignments.iter()
+        .map(|a| (a.target_start, a.target_end))
+        .collect::<Vec<_>>());
+    
+    let query_coverage = query_covered as f64 / stats.query_length as f64;
+    let target_coverage = target_covered as f64 / stats.target_length as f64;
+    
+    // Calculate Jaccard index (intersection / union)
+    // For simplicity, we approximate this as min(query_cov, target_cov) / max(query_cov, target_cov)
+    let jaccard = if query_covered.max(target_covered) > 0 {
+        query_covered.min(target_covered) as f64 / query_covered.max(target_covered) as f64
+    } else {
+        0.0
+    };
+    
+    // Calculate base pair Jaccard using CIGAR strings
+    let bp_jaccard = calculate_bp_jaccard(&stats.alignments)?;
+    
+    // Calculate identity metrics
+    let total_matching: usize = stats.alignments.iter().map(|a| a.matching_bases).sum();
+    let total_block_length: usize = stats.alignments.iter().map(|a| a.block_length).sum();
+    let total_query_aligned: usize = stats.alignments.iter().map(|a| a.query_end - a.query_start).sum();
+    
+    let identity = total_matching as f64 / total_query_aligned as f64;
+    let gap_compressed_identity = if total_block_length > 0 {
+        total_matching as f64 / total_block_length as f64
+    } else {
+        0.0
+    };
+    
+    // BLAST identity is typically matches / alignment_length including gaps
+    let blast_identity = gap_compressed_identity; // Same as gap-compressed for now
+    
+    Ok(PairCoverageStats {
+        num_alignments,
+        median_length,
+        mean_length,
+        std_length,
+        query_coverage,
+        target_coverage,
+        jaccard,
+        bp_jaccard,
+        identity,
+        gap_compressed_identity,
+        blast_identity,
+    })
+}
+
+fn calculate_bp_jaccard(alignments: &[AlignmentInfo]) -> Result<Option<f64>> {
+    let mut total_matches = 0u64;
+    let mut total_mismatches = 0u64;
+    let mut total_insertions = 0u64;
+    let mut total_deletions = 0u64;
+    
+    let mut has_cigars = false;
+    
+    for alignment in alignments {
+        if !alignment.cigar.is_empty() {
+            has_cigars = true;
+            let ops = parse_cigar(&alignment.cigar)?;
+            
+            for op in ops {
+                match op {
+                    CigarOp::Match(count) => total_matches += count,
+                    CigarOp::Mismatch(count) => total_mismatches += count,
+                    CigarOp::Insertion(count) => total_insertions += count,
+                    CigarOp::Deletion(count) => total_deletions += count,
+                }
+            }
+        }
+    }
+    
+    if !has_cigars {
+        return Ok(None);
+    }
+    
+    // Base pair Jaccard: matches / (matches + mismatches + insertions + deletions)
+    let total_operations = total_matches + total_mismatches + total_insertions + total_deletions;
+    if total_operations > 0 {
+        Ok(Some(total_matches as f64 / total_operations as f64))
+    } else {
+        Ok(Some(0.0))
     }
 }
 
