@@ -90,6 +90,12 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
     let mut target_lengths = Vec::new();
     let mut gap_compressed_identities = Vec::new();
     let mut block_identities = Vec::new();
+    
+    // Coverage tracking
+    let mut query_coverage: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    let mut target_coverage: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+    let mut query_sequence_lengths: HashMap<String, usize> = HashMap::new();
+    let mut target_sequence_lengths: HashMap<String, usize> = HashMap::new();
 
     for (line_number, line) in reader.lines().enumerate() {
         let line = line.context("Failed to read PAF line")?;
@@ -123,6 +129,18 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
             0.0
         };
         block_identities.push(query_block_identity);
+
+        // Track coverage
+        query_coverage.entry(record.query_name.clone())
+            .or_insert_with(Vec::new)
+            .push((record.query_start, record.query_end));
+        target_coverage.entry(record.target_name.clone())
+            .or_insert_with(Vec::new)
+            .push((record.target_start, record.target_end));
+        
+        // Track sequence lengths
+        query_sequence_lengths.insert(record.query_name, record.query_length);
+        target_sequence_lengths.insert(record.target_name, record.target_length);
     }
 
     if total_records == 0 {
@@ -156,6 +174,18 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
     
     println!("Block identity (matches/query_length):");
     print_identity_stats(&block_identities);
+    println!();
+
+    // Calculate coverage statistics
+    let query_coverage_stats = calculate_coverage_stats(&query_coverage, &query_sequence_lengths);
+    let target_coverage_stats = calculate_coverage_stats(&target_coverage, &target_sequence_lengths);
+
+    println!("Query coverage:");
+    print_coverage_stats(&query_coverage_stats);
+    println!();
+
+    println!("Target coverage:");
+    print_coverage_stats(&target_coverage_stats);
 
     Ok(())
 }
@@ -198,6 +228,150 @@ fn print_identity_stats(identities: &[f64]) {
     println!("  Max: {:.2}%", identities[identities.len() - 1]);
     println!("  Mean: {:.2}%", mean);
     println!("  Median: {:.2}%", median);
+}
+
+#[derive(Debug)]
+struct CoverageStats {
+    coverage_percentages: Vec<f64>,
+    mean: f64,
+    variance: f64,
+    skewness: f64,
+    kurtosis: f64,
+    total_sequences: usize,
+}
+
+fn calculate_coverage_stats(
+    coverage_map: &HashMap<String, Vec<(usize, usize)>>,
+    sequence_lengths: &HashMap<String, usize>,
+) -> CoverageStats {
+    let mut coverage_percentages = Vec::new();
+    
+    for (seq_name, intervals) in coverage_map {
+        if let Some(&seq_length) = sequence_lengths.get(seq_name) {
+            let covered_bases = calculate_covered_bases(intervals);
+            let coverage_pct = (covered_bases as f64 / seq_length as f64) * 100.0;
+            coverage_percentages.push(coverage_pct);
+        }
+    }
+    
+    // Add sequences with zero coverage
+    for (seq_name, &_seq_length) in sequence_lengths {
+        if !coverage_map.contains_key(seq_name) {
+            coverage_percentages.push(0.0);
+        }
+    }
+    
+    if coverage_percentages.is_empty() {
+        return CoverageStats {
+            coverage_percentages: Vec::new(),
+            mean: 0.0,
+            variance: 0.0,
+            skewness: 0.0,
+            kurtosis: 0.0,
+            total_sequences: 0,
+        };
+    }
+    
+    coverage_percentages.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    
+    let mean = coverage_percentages.iter().sum::<f64>() / coverage_percentages.len() as f64;
+    let variance = calculate_variance(&coverage_percentages, mean);
+    let skewness = calculate_skewness(&coverage_percentages, mean, variance);
+    let kurtosis = calculate_kurtosis(&coverage_percentages, mean, variance);
+    
+    CoverageStats {
+        coverage_percentages,
+        mean,
+        variance,
+        skewness,
+        kurtosis,
+        total_sequences: sequence_lengths.len(),
+    }
+}
+
+fn calculate_covered_bases(intervals: &[(usize, usize)]) -> usize {
+    if intervals.is_empty() {
+        return 0;
+    }
+    
+    let mut sorted_intervals = intervals.to_vec();
+    sorted_intervals.sort_by(|a, b| a.0.cmp(&b.0));
+    
+    let mut covered = 0;
+    let mut current_end = 0;
+    
+    for &(start, end) in &sorted_intervals {
+        if start >= current_end {
+            covered += end - start;
+            current_end = end;
+        } else if end > current_end {
+            covered += end - current_end;
+            current_end = end;
+        }
+    }
+    
+    covered
+}
+
+fn calculate_variance(values: &[f64], mean: f64) -> f64 {
+    if values.len() <= 1 {
+        return 0.0;
+    }
+    
+    let sum_squared_diff: f64 = values.iter()
+        .map(|x| (x - mean).powi(2))
+        .sum();
+    
+    sum_squared_diff / (values.len() - 1) as f64
+}
+
+fn calculate_skewness(values: &[f64], mean: f64, variance: f64) -> f64 {
+    if values.len() < 3 || variance == 0.0 {
+        return 0.0;
+    }
+    
+    let std_dev = variance.sqrt();
+    let sum_cubed_diff: f64 = values.iter()
+        .map(|x| ((x - mean) / std_dev).powi(3))
+        .sum();
+    
+    sum_cubed_diff / values.len() as f64
+}
+
+fn calculate_kurtosis(values: &[f64], mean: f64, variance: f64) -> f64 {
+    if values.len() < 4 || variance == 0.0 {
+        return 0.0;
+    }
+    
+    let std_dev = variance.sqrt();
+    let sum_fourth_diff: f64 = values.iter()
+        .map(|x| ((x - mean) / std_dev).powi(4))
+        .sum();
+    
+    (sum_fourth_diff / values.len() as f64) - 3.0  // Excess kurtosis
+}
+
+fn print_coverage_stats(stats: &CoverageStats) {
+    if stats.coverage_percentages.is_empty() {
+        println!("  No data");
+        return;
+    }
+    
+    let median = if stats.coverage_percentages.len() % 2 == 0 {
+        let mid = stats.coverage_percentages.len() / 2;
+        (stats.coverage_percentages[mid - 1] + stats.coverage_percentages[mid]) / 2.0
+    } else {
+        stats.coverage_percentages[stats.coverage_percentages.len() / 2]
+    };
+    
+    println!("  Total sequences: {}", stats.total_sequences);
+    println!("  Min coverage: {:.2}%", stats.coverage_percentages[0]);
+    println!("  Max coverage: {:.2}%", stats.coverage_percentages[stats.coverage_percentages.len() - 1]);
+    println!("  Mean coverage: {:.2}%", stats.mean);
+    println!("  Median coverage: {:.2}%", median);
+    println!("  Std deviation: {:.2}%", stats.variance.sqrt());
+    println!("  Skewness: {:.3}", stats.skewness);
+    println!("  Kurtosis: {:.3}", stats.kurtosis);
 }
 
 fn validate_paf(
