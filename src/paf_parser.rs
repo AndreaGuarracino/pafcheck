@@ -42,9 +42,13 @@ impl PafRecord {
             target_length: fields[6].parse().context("Failed to parse target length")?,
             target_start: fields[7].parse().context("Failed to parse target start")?,
             target_end: fields[8].parse().context("Failed to parse target end")?,
-            matching_bases: fields[9].parse().context("Failed to parse matching bases")?,
+            matching_bases: fields[9]
+                .parse()
+                .context("Failed to parse matching bases")?,
             block_length: fields[10].parse().context("Failed to parse block length")?,
-            mapping_quality: fields[11].parse().context("Failed to parse mapping quality")?,
+            mapping_quality: fields[11]
+                .parse()
+                .context("Failed to parse mapping quality")?,
             cigar,
         })
     }

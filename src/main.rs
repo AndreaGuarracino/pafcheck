@@ -4,10 +4,10 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
+use pafcheck::cigar_parser::{parse_cigar, CigarOp};
 use pafcheck::fasta_reader::MultiFastaReader;
 use pafcheck::paf_parser::PafRecord;
 use pafcheck::validator::{validate_record, ErrorType, ValidationError};
-use pafcheck::cigar_parser::{parse_cigar, CigarOp};
 
 fn main() {
     let matches = App::new("PAF Validator")
@@ -128,7 +128,7 @@ fn show_paf_coverage(paf_path: &str) -> Result<()> {
         ))?;
 
         let key = (record.query_name.clone(), record.target_name.clone());
-        
+
         let alignment_info = AlignmentInfo {
             query_start: record.query_start,
             query_end: record.query_end,
@@ -139,7 +139,8 @@ fn show_paf_coverage(paf_path: &str) -> Result<()> {
             cigar: record.cigar.clone(),
         };
 
-        pair_stats.entry(key.clone())
+        pair_stats
+            .entry(key.clone())
             .and_modify(|stats| stats.alignments.push(alignment_info.clone()))
             .or_insert_with(|| AlignmentPairStats {
                 query_name: record.query_name.clone(),
@@ -156,13 +157,26 @@ fn show_paf_coverage(paf_path: &str) -> Result<()> {
 
 fn print_coverage_table(pair_stats: &HashMap<(String, String), AlignmentPairStats>) -> Result<()> {
     // Print header
-    println!("{:<15} {:<15} {:<8} {:<10} {:<10} {:<10} {:<12} {:<12} {:<8} {:<12} {:<10} {:<12} {:<12}", 
-             "Query", "Target", "NumAlign", "MedianLen", "MeanLen", "StdLen", 
-             "QueryCov", "TargetCov", "Jaccard", "BPJaccard", "Identity", "GapCompId", "BlastId");
-    
+    println!(
+        "{:<15} {:<15} {:<8} {:<10} {:<10} {:<10} {:<12} {:<12} {:<8} {:<12} {:<10} {:<12} {:<12}",
+        "Query",
+        "Target",
+        "NumAlign",
+        "MedianLen",
+        "MeanLen",
+        "StdLen",
+        "QueryCov",
+        "TargetCov",
+        "Jaccard",
+        "BPJaccard",
+        "Identity",
+        "GapCompId",
+        "BlastId"
+    );
+
     for ((_query, _target), stats) in pair_stats {
         let coverage_stats = calculate_pair_coverage_stats(stats)?;
-        
+
         println!("{:<15} {:<15} {:<8} {:<10.1} {:<10.1} {:<10.1} {:<12.2} {:<12.2} {:<8.3} {:<12} {:<10.2} {:<12.2} {:<12.2}",
                  stats.query_name,
                  stats.target_name,
@@ -178,7 +192,7 @@ fn print_coverage_table(pair_stats: &HashMap<(String, String), AlignmentPairStat
                  coverage_stats.gap_compressed_identity * 100.0,
                  coverage_stats.blast_identity * 100.0);
     }
-    
+
     Ok(())
 }
 
@@ -199,42 +213,56 @@ struct PairCoverageStats {
 
 fn calculate_pair_coverage_stats(stats: &AlignmentPairStats) -> Result<PairCoverageStats> {
     let num_alignments = stats.alignments.len();
-    
+
     // Calculate length statistics
-    let lengths: Vec<usize> = stats.alignments.iter()
+    let lengths: Vec<usize> = stats
+        .alignments
+        .iter()
         .map(|a| a.query_end - a.query_start)
         .collect();
-    
+
     let mean_length = lengths.iter().sum::<usize>() as f64 / lengths.len() as f64;
-    
+
     let mut sorted_lengths = lengths.clone();
     sorted_lengths.sort_unstable();
     let median_length = if sorted_lengths.len() % 2 == 0 {
-        (sorted_lengths[sorted_lengths.len() / 2 - 1] + sorted_lengths[sorted_lengths.len() / 2]) as f64 / 2.0
+        (sorted_lengths[sorted_lengths.len() / 2 - 1] + sorted_lengths[sorted_lengths.len() / 2])
+            as f64
+            / 2.0
     } else {
         sorted_lengths[sorted_lengths.len() / 2] as f64
     };
-    
+
     let std_length = if lengths.len() > 1 {
-        let variance = lengths.iter()
+        let variance = lengths
+            .iter()
             .map(|&l| (l as f64 - mean_length).powi(2))
-            .sum::<f64>() / (lengths.len() - 1) as f64;
+            .sum::<f64>()
+            / (lengths.len() - 1) as f64;
         variance.sqrt()
     } else {
         0.0
     };
-    
+
     // Calculate coverages
-    let query_covered = calculate_covered_bases(&stats.alignments.iter()
-        .map(|a| (a.query_start, a.query_end))
-        .collect::<Vec<_>>());
-    let target_covered = calculate_covered_bases(&stats.alignments.iter()
-        .map(|a| (a.target_start, a.target_end))
-        .collect::<Vec<_>>());
-    
+    let query_covered = calculate_covered_bases(
+        &stats
+            .alignments
+            .iter()
+            .map(|a| (a.query_start, a.query_end))
+            .collect::<Vec<_>>(),
+    );
+    let target_covered = calculate_covered_bases(
+        &stats
+            .alignments
+            .iter()
+            .map(|a| (a.target_start, a.target_end))
+            .collect::<Vec<_>>(),
+    );
+
     let query_coverage = query_covered as f64 / stats.query_length as f64;
     let target_coverage = target_covered as f64 / stats.target_length as f64;
-    
+
     // Calculate Jaccard index (intersection / union)
     // For simplicity, we approximate this as min(query_cov, target_cov) / max(query_cov, target_cov)
     let jaccard = if query_covered.max(target_covered) > 0 {
@@ -242,25 +270,29 @@ fn calculate_pair_coverage_stats(stats: &AlignmentPairStats) -> Result<PairCover
     } else {
         0.0
     };
-    
+
     // Calculate base pair Jaccard using CIGAR strings
     let bp_jaccard = calculate_bp_jaccard(&stats.alignments)?;
-    
+
     // Calculate identity metrics
     let total_matching: usize = stats.alignments.iter().map(|a| a.matching_bases).sum();
     let total_block_length: usize = stats.alignments.iter().map(|a| a.block_length).sum();
-    let total_query_aligned: usize = stats.alignments.iter().map(|a| a.query_end - a.query_start).sum();
-    
+    let total_query_aligned: usize = stats
+        .alignments
+        .iter()
+        .map(|a| a.query_end - a.query_start)
+        .sum();
+
     let identity = total_matching as f64 / total_query_aligned as f64;
     let gap_compressed_identity = if total_block_length > 0 {
         total_matching as f64 / total_block_length as f64
     } else {
         0.0
     };
-    
+
     // BLAST identity is typically matches / alignment_length including gaps
     let blast_identity = gap_compressed_identity; // Same as gap-compressed for now
-    
+
     Ok(PairCoverageStats {
         num_alignments,
         median_length,
@@ -281,14 +313,14 @@ fn calculate_bp_jaccard(alignments: &[AlignmentInfo]) -> Result<Option<f64>> {
     let mut total_mismatches = 0u64;
     let mut total_insertions = 0u64;
     let mut total_deletions = 0u64;
-    
+
     let mut has_cigars = false;
-    
+
     for alignment in alignments {
         if !alignment.cigar.is_empty() {
             has_cigars = true;
             let ops = parse_cigar(&alignment.cigar)?;
-            
+
             for op in ops {
                 match op {
                     CigarOp::Match(count) => total_matches += count,
@@ -299,11 +331,11 @@ fn calculate_bp_jaccard(alignments: &[AlignmentInfo]) -> Result<Option<f64>> {
             }
         }
     }
-    
+
     if !has_cigars {
         return Ok(None);
     }
-    
+
     // Base pair Jaccard: matches / (matches + mismatches + insertions + deletions)
     let total_operations = total_matches + total_mismatches + total_insertions + total_deletions;
     if total_operations > 0 {
@@ -323,7 +355,7 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
     let mut target_lengths = Vec::new();
     let mut gap_compressed_identities = Vec::new();
     let mut block_identities = Vec::new();
-    
+
     // Coverage tracking
     let mut query_coverage: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     let mut target_coverage: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
@@ -338,14 +370,14 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
         ))?;
 
         total_records += 1;
-        
+
         if !record.cigar.is_empty() {
             records_with_cigar += 1;
         }
 
         let query_mapping_length = record.query_end - record.query_start;
         let target_mapping_length = record.target_end - record.target_start;
-        
+
         query_lengths.push(query_mapping_length);
         target_lengths.push(target_mapping_length);
 
@@ -364,13 +396,15 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
         block_identities.push(query_block_identity);
 
         // Track coverage
-        query_coverage.entry(record.query_name.clone())
+        query_coverage
+            .entry(record.query_name.clone())
             .or_insert_with(Vec::new)
             .push((record.query_start, record.query_end));
-        target_coverage.entry(record.target_name.clone())
+        target_coverage
+            .entry(record.target_name.clone())
             .or_insert_with(Vec::new)
             .push((record.target_start, record.target_end));
-        
+
         // Track sequence lengths
         query_sequence_lengths.insert(record.query_name, record.query_length);
         target_sequence_lengths.insert(record.target_name, record.target_length);
@@ -389,29 +423,33 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
     println!("PAF Statistics:");
     println!("===============");
     println!("Total records: {}", total_records);
-    println!("Records with CIGAR: {} ({:.1}%)", records_with_cigar, 
-             (records_with_cigar as f64 / total_records as f64) * 100.0);
+    println!(
+        "Records with CIGAR: {} ({:.1}%)",
+        records_with_cigar,
+        (records_with_cigar as f64 / total_records as f64) * 100.0
+    );
     println!();
-    
+
     println!("Query mapping lengths:");
     print_length_stats(&query_lengths);
     println!();
-    
+
     println!("Target mapping lengths:");
     print_length_stats(&target_lengths);
     println!();
-    
+
     println!("Gap-compressed identity:");
     print_identity_stats(&gap_compressed_identities);
     println!();
-    
+
     println!("Block identity (matches/query_length):");
     print_identity_stats(&block_identities);
     println!();
 
     // Calculate coverage statistics
     let query_coverage_stats = calculate_coverage_stats(&query_coverage, &query_sequence_lengths);
-    let target_coverage_stats = calculate_coverage_stats(&target_coverage, &target_sequence_lengths);
+    let target_coverage_stats =
+        calculate_coverage_stats(&target_coverage, &target_sequence_lengths);
 
     println!("Query coverage:");
     print_coverage_stats(&query_coverage_stats);
@@ -428,7 +466,7 @@ fn print_length_stats(lengths: &[usize]) {
         println!("  No data");
         return;
     }
-    
+
     let total: usize = lengths.iter().sum();
     let mean = total as f64 / lengths.len() as f64;
     let median = if lengths.len() % 2 == 0 {
@@ -436,7 +474,7 @@ fn print_length_stats(lengths: &[usize]) {
     } else {
         lengths[lengths.len() / 2] as f64
     };
-    
+
     println!("  Min: {}", lengths[0]);
     println!("  Max: {}", lengths[lengths.len() - 1]);
     println!("  Mean: {:.1}", mean);
@@ -448,7 +486,7 @@ fn print_identity_stats(identities: &[f64]) {
         println!("  No data");
         return;
     }
-    
+
     let total: f64 = identities.iter().sum();
     let mean = total / identities.len() as f64;
     let median = if identities.len() % 2 == 0 {
@@ -456,7 +494,7 @@ fn print_identity_stats(identities: &[f64]) {
     } else {
         identities[identities.len() / 2]
     };
-    
+
     println!("  Min: {:.2}%", identities[0]);
     println!("  Max: {:.2}%", identities[identities.len() - 1]);
     println!("  Mean: {:.2}%", mean);
@@ -478,7 +516,7 @@ fn calculate_coverage_stats(
     sequence_lengths: &HashMap<String, usize>,
 ) -> CoverageStats {
     let mut coverage_percentages = Vec::new();
-    
+
     for (seq_name, intervals) in coverage_map {
         if let Some(&seq_length) = sequence_lengths.get(seq_name) {
             let covered_bases = calculate_covered_bases(intervals);
@@ -486,14 +524,14 @@ fn calculate_coverage_stats(
             coverage_percentages.push(coverage_pct);
         }
     }
-    
+
     // Add sequences with zero coverage
     for (seq_name, &_seq_length) in sequence_lengths {
         if !coverage_map.contains_key(seq_name) {
             coverage_percentages.push(0.0);
         }
     }
-    
+
     if coverage_percentages.is_empty() {
         return CoverageStats {
             coverage_percentages: Vec::new(),
@@ -504,14 +542,14 @@ fn calculate_coverage_stats(
             total_sequences: 0,
         };
     }
-    
+
     coverage_percentages.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    
+
     let mean = coverage_percentages.iter().sum::<f64>() / coverage_percentages.len() as f64;
     let variance = calculate_variance(&coverage_percentages, mean);
     let skewness = calculate_skewness(&coverage_percentages, mean, variance);
     let kurtosis = calculate_kurtosis(&coverage_percentages, mean, variance);
-    
+
     CoverageStats {
         coverage_percentages,
         mean,
@@ -526,13 +564,13 @@ fn calculate_covered_bases(intervals: &[(usize, usize)]) -> usize {
     if intervals.is_empty() {
         return 0;
     }
-    
+
     let mut sorted_intervals = intervals.to_vec();
     sorted_intervals.sort_by(|a, b| a.0.cmp(&b.0));
-    
+
     let mut covered = 0;
     let mut current_end = 0;
-    
+
     for &(start, end) in &sorted_intervals {
         if start >= current_end {
             covered += end - start;
@@ -542,7 +580,7 @@ fn calculate_covered_bases(intervals: &[(usize, usize)]) -> usize {
             current_end = end;
         }
     }
-    
+
     covered
 }
 
@@ -550,11 +588,9 @@ fn calculate_variance(values: &[f64], mean: f64) -> f64 {
     if values.len() <= 1 {
         return 0.0;
     }
-    
-    let sum_squared_diff: f64 = values.iter()
-        .map(|x| (x - mean).powi(2))
-        .sum();
-    
+
+    let sum_squared_diff: f64 = values.iter().map(|x| (x - mean).powi(2)).sum();
+
     sum_squared_diff / (values.len() - 1) as f64
 }
 
@@ -562,12 +598,10 @@ fn calculate_skewness(values: &[f64], mean: f64, variance: f64) -> f64 {
     if values.len() < 3 || variance == 0.0 {
         return 0.0;
     }
-    
+
     let std_dev = variance.sqrt();
-    let sum_cubed_diff: f64 = values.iter()
-        .map(|x| ((x - mean) / std_dev).powi(3))
-        .sum();
-    
+    let sum_cubed_diff: f64 = values.iter().map(|x| ((x - mean) / std_dev).powi(3)).sum();
+
     sum_cubed_diff / values.len() as f64
 }
 
@@ -575,13 +609,11 @@ fn calculate_kurtosis(values: &[f64], mean: f64, variance: f64) -> f64 {
     if values.len() < 4 || variance == 0.0 {
         return 0.0;
     }
-    
+
     let std_dev = variance.sqrt();
-    let sum_fourth_diff: f64 = values.iter()
-        .map(|x| ((x - mean) / std_dev).powi(4))
-        .sum();
-    
-    (sum_fourth_diff / values.len() as f64) - 3.0  // Excess kurtosis
+    let sum_fourth_diff: f64 = values.iter().map(|x| ((x - mean) / std_dev).powi(4)).sum();
+
+    (sum_fourth_diff / values.len() as f64) - 3.0 // Excess kurtosis
 }
 
 fn print_coverage_stats(stats: &CoverageStats) {
@@ -589,17 +621,20 @@ fn print_coverage_stats(stats: &CoverageStats) {
         println!("  No data");
         return;
     }
-    
+
     let median = if stats.coverage_percentages.len() % 2 == 0 {
         let mid = stats.coverage_percentages.len() / 2;
         (stats.coverage_percentages[mid - 1] + stats.coverage_percentages[mid]) / 2.0
     } else {
         stats.coverage_percentages[stats.coverage_percentages.len() / 2]
     };
-    
+
     println!("  Total sequences: {}", stats.total_sequences);
     println!("  Min coverage: {:.2}%", stats.coverage_percentages[0]);
-    println!("  Max coverage: {:.2}%", stats.coverage_percentages[stats.coverage_percentages.len() - 1]);
+    println!(
+        "  Max coverage: {:.2}%",
+        stats.coverage_percentages[stats.coverage_percentages.len() - 1]
+    );
     println!("  Mean coverage: {:.2}%", stats.mean);
     println!("  Median coverage: {:.2}%", median);
     println!("  Std deviation: {:.2}%", stats.variance.sqrt());
