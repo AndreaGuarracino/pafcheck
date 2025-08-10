@@ -31,6 +31,9 @@ fn test_mismatch_detection() -> Result<()> {
         target_length: 5,
         target_start: 0,
         target_end: 5,
+        matching_bases: 4,
+        block_length: 5,
+        mapping_quality: 60,
         cigar: "4=1X".to_string(),
     };
 
@@ -75,6 +78,9 @@ fn test_false_match_detection() -> Result<()> {
         target_length: 5,
         target_start: 0,
         target_end: 5,
+        matching_bases: 5,
+        block_length: 5,
+        mapping_quality: 60,
         cigar: "5=".to_string(),
     };
 
@@ -118,6 +124,9 @@ fn test_false_mismatch_detection() -> Result<()> {
         target_length: 5,
         target_start: 0,
         target_end: 5,
+        matching_bases: 4,
+        block_length: 5,
+        mapping_quality: 60,
         cigar: "4=1X".to_string(),
     };
 
@@ -161,6 +170,9 @@ fn test_mixed_match_mismatch_errors() -> Result<()> {
         target_length: 8,
         target_start: 0,
         target_end: 8,
+        matching_bases: 7,
+        block_length: 8,
+        mapping_quality: 60,
         cigar: "4=1X3=".to_string(),
     };
 

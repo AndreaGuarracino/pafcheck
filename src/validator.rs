@@ -213,6 +213,9 @@ mod tests {
             target_length: 12,
             target_start: 0,
             target_end: 12,
+            matching_bases: 11,
+            block_length: 12,
+            mapping_quality: 60,
             cigar: cigar.to_string(),
         };
 
@@ -264,6 +267,9 @@ mod tests {
             target_length: 12,
             target_start: 0,
             target_end: 12,
+            matching_bases: 11,
+            block_length: 12,
+            mapping_quality: 60,
             cigar: cigar.to_string(),
         };
 
