@@ -24,7 +24,7 @@ fn main() {
                 .value_name("QUERY_FASTA")
                 .help("Path to the bgzip-compressed and tabix-indexed query FASTA file")
                 .takes_value(true)
-                .required_unless_one(&["info", "coverage"]),
+                .required_unless_one(["info", "coverage"]),
         )
         .arg(
             Arg::with_name("target_fasta")
@@ -89,12 +89,12 @@ fn main() {
 
     if show_info {
         if let Err(e) = show_paf_info(paf_path) {
-            eprintln!("[pafcheck] Error: {}", e);
+            eprintln!("[pafcheck] Error: {e}");
             std::process::exit(1);
         }
     } else if show_coverage {
         if let Err(e) = show_paf_coverage(paf_path) {
-            eprintln!("[pafcheck] Error: {}", e);
+            eprintln!("[pafcheck] Error: {e}");
             std::process::exit(1);
         }
     } else {
@@ -103,7 +103,7 @@ fn main() {
                 .parse::<usize>()
                 .context("Invalid number of threads")
                 .unwrap_or_else(|e| {
-                    eprintln!("[pafcheck] Error: {}", e);
+                    eprintln!("[pafcheck] Error: {e}");
                     std::process::exit(1);
                 })
         } else if std::thread::available_parallelism()
@@ -126,7 +126,7 @@ fn main() {
             error_mode,
             num_threads,
         ) {
-            eprintln!("[pafcheck] Error: {}", e);
+            eprintln!("[pafcheck] Error: {e}");
             std::process::exit(1);
         }
     }
@@ -231,7 +231,7 @@ fn print_coverage_table(pair_stats: &HashMap<(String, String), AlignmentPairStat
                  coverage_stats.query_coverage * 100.0,
                  coverage_stats.target_coverage * 100.0,
                  coverage_stats.jaccard,
-                 coverage_stats.bp_jaccard.map_or("NA".to_string(), |j| format!("{:.3}", j)),
+                 coverage_stats.bp_jaccard.map_or("NA".to_string(), |j| format!("{j:.3}")),
                  coverage_stats.identity * 100.0,
                  coverage_stats.gap_compressed_identity * 100.0,
                  coverage_stats.blast_identity * 100.0);
@@ -442,11 +442,11 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
         // Track coverage
         query_coverage
             .entry(record.query_name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((record.query_start, record.query_end));
         target_coverage
             .entry(record.target_name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push((record.target_start, record.target_end));
 
         // Track sequence lengths
@@ -466,7 +466,7 @@ fn show_paf_info(paf_path: &str) -> Result<()> {
 
     println!("PAF Statistics:");
     println!("===============");
-    println!("Total records: {}", total_records);
+    println!("Total records: {total_records}");
     println!(
         "Records with CIGAR: {} ({:.1}%)",
         records_with_cigar,
@@ -521,8 +521,8 @@ fn print_length_stats(lengths: &[usize]) {
 
     println!("  Min: {}", lengths[0]);
     println!("  Max: {}", lengths[lengths.len() - 1]);
-    println!("  Mean: {:.1}", mean);
-    println!("  Median: {:.1}", median);
+    println!("  Mean: {mean:.1}");
+    println!("  Median: {median:.1}");
 }
 
 fn print_identity_stats(identities: &[f64]) {
@@ -541,8 +541,8 @@ fn print_identity_stats(identities: &[f64]) {
 
     println!("  Min: {:.2}%", identities[0]);
     println!("  Max: {:.2}%", identities[identities.len() - 1]);
-    println!("  Mean: {:.2}%", mean);
-    println!("  Median: {:.2}%", median);
+    println!("  Mean: {mean:.2}%");
+    println!("  Median: {median:.2}%");
 }
 
 #[derive(Debug)]
@@ -680,7 +680,7 @@ fn print_coverage_stats(stats: &CoverageStats) {
         stats.coverage_percentages[stats.coverage_percentages.len() - 1]
     );
     println!("  Mean coverage: {:.2}%", stats.mean);
-    println!("  Median coverage: {:.2}%", median);
+    println!("  Median coverage: {median:.2}%");
     println!("  Std deviation: {:.2}%", stats.variance.sqrt());
     println!("  Skewness: {:.3}", stats.skewness);
     println!("  Kurtosis: {:.3}", stats.kurtosis);
@@ -774,16 +774,16 @@ fn validate_paf(
 
     // Print all error messages in order
     for message in all_error_messages {
-        println!("{}", message);
+        println!("{message}");
     }
 
     // Print summary
     if total_error_count > 0 {
         println!("[pafcheck] PAF validation completed with errors:");
         for (error_type, count) in error_type_counts.iter() {
-            println!("[pafcheck]   - {:?}: {} errors", error_type, count);
+            println!("[pafcheck]   - {error_type:?}: {count} errors");
         }
-        println!("[pafcheck] Total errors: {}", total_error_count);
+        println!("[pafcheck] Total errors: {total_error_count}");
         anyhow::bail!("PAF validation failed with {} errors", total_error_count);
     } else {
         println!("[pafcheck] PAF validation completed successfully. No errors found.");
@@ -809,12 +809,11 @@ fn process_chunk(
         // Update progress
         if i % 100 == 0 {
             progress.inc(100.min(chunk.len() - i) as u64);
-            progress.set_message(format!("Processing record {}", line_number));
+            progress.set_message(format!("Processing record {line_number}"));
         }
 
         let record = PafRecord::from_line(line).context(format!(
-            "Failed to parse PAF record at line {}",
-            line_number
+            "Failed to parse PAF record at line {line_number}"
         ))?;
 
         let mut output = Vec::new();
@@ -830,14 +829,13 @@ fn process_chunk(
                     ));
                     if count > 1 {
                         error_messages.push(format!(
-                            "[pafcheck] {:?}: Total occurrences: {}",
-                            error_type, count
+                            "[pafcheck] {error_type:?}: Total occurrences: {count}"
                         ));
                     }
                 }
             } else {
                 error_count += 1;
-                error_messages.push(format!("[pafcheck] Error at line {}: {}", line_number, e));
+                error_messages.push(format!("[pafcheck] Error at line {line_number}: {e}"));
             }
         }
     }

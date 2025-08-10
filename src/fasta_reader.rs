@@ -63,7 +63,7 @@ impl MultiFastaReader {
         // https://github.com/rust-bio/rust-htslib/issues/401#issuecomment-1704290171
         let seq_vec = reader
             .fetch_seq(seq_name, start, end - 1) // Adjust for 0-based indexing
-            .context(format!("Failed to fetch sequence: {}", seq_name))
+            .context(format!("Failed to fetch sequence: {seq_name}"))
             .map(|seq| {
                 let seq_vec = seq.to_vec();
                 // Free the memory allocated by htslib to prevent memory leak
