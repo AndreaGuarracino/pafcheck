@@ -1,7 +1,14 @@
 use rust_htslib::faidx::Reader as FastaReader;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+
+thread_local! {
+    // One open reader per FASTA per thread: opening reloads the whole .fai,
+    // which made each fetch cost O(number of sequences).
+    static READERS: RefCell<HashMap<PathBuf, FastaReader>> = RefCell::new(HashMap::new());
+}
 
 #[derive(Debug)]
 pub struct FastaIndex {
@@ -68,19 +75,27 @@ impl FastaIndex {
             .ok_or_else(|| format!("Sequence '{seq_name}' not found in supplied FASTA files"))?;
 
         let fasta_path = &self.fasta_paths[*fasta_idx];
-        let reader = FastaReader::from_path(fasta_path)
-            .map_err(|e| format!("Failed to open FASTA '{}': {}", fasta_path.display(), e))?;
-
-        let raw_seq = reader.fetch_seq(seq_name, start, end - 1).map_err(|e| {
-            format!(
-                "Failed to fetch {seq_name}:{start}-{end} from '{}': {e}",
-                fasta_path.display()
-            )
+        let mut seq_vec = READERS.with(|readers| -> Result<Vec<u8>, String> {
+            let mut readers = readers.borrow_mut();
+            if !readers.contains_key(fasta_path) {
+                let reader = FastaReader::from_path(fasta_path).map_err(|e| {
+                    format!("Failed to open FASTA '{}': {}", fasta_path.display(), e)
+                })?;
+                readers.insert(fasta_path.clone(), reader);
+            }
+            let reader = &readers[fasta_path];
+            let raw_seq = reader.fetch_seq(seq_name, start, end - 1).map_err(|e| {
+                format!(
+                    "Failed to fetch {seq_name}:{start}-{end} from '{}': {e}",
+                    fasta_path.display()
+                )
+            })?;
+            let seq = raw_seq.to_vec();
+            // Apply the fix for the rust_htslib memory leak bug
+            // https://github.com/rust-bio/rust-htslib/issues/401#issuecomment-1704290171
+            unsafe { libc::free(raw_seq.as_ptr() as *mut std::ffi::c_void) };
+            Ok(seq)
         })?;
-        let mut seq_vec = raw_seq.to_vec();
-        // Apply the fix for the rust_htslib memory leak bug
-        // https://github.com/rust-bio/rust-htslib/issues/401#issuecomment-1704290171
-        unsafe { libc::free(raw_seq.as_ptr() as *mut std::ffi::c_void) };
         seq_vec.iter_mut().for_each(|b| *b = b.to_ascii_uppercase());
         Ok(seq_vec)
     }
