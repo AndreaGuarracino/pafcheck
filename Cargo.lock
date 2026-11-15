@@ -658,6 +658,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
 
 [[package]]
+name = "onecode"
+version = "0.1.0"
+source = "git+https://github.com/pangenome/onecode-rs?rev=5fa1e9333f18b311580f1346751c630c626d8342#5fa1e9333f18b311580f1346751c630c626d8342"
+dependencies = [
+ "cc",
+ "libc",
+]
+
+[[package]]
 name = "os_str_bytes"
 version = "6.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -673,6 +682,7 @@ dependencies = [
  "indicatif",
  "libc",
  "log",
+ "onecode",
  "ragc-reader",
  "rayon",
  "rust-htslib",
