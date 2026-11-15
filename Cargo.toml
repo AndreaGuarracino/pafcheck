@@ -16,6 +16,7 @@ indicatif = "0.17"
 
 rayon = "1.10"
 ragc-reader = { git = "https://github.com/AndreaGuarracino/ragc", branch = "tweaks" }
+onecode = { git = "https://github.com/pangenome/onecode-rs", rev = "5fa1e9333f18b311580f1346751c630c626d8342" }
 
 log = "0.4"
 env_logger = "0.11"

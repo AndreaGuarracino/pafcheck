@@ -3,6 +3,7 @@ use std::fs;
 
 use super::agc_index::AgcIndex;
 use super::faidx::FastaIndex;
+use super::gdb_index::GdbIndex;
 
 pub fn collect_sequence_paths(
     mut files: Vec<String>,
@@ -34,11 +35,12 @@ fn get_extension(filename: &str) -> &str {
     }
 }
 
-/// Unified sequence index that supports both FASTA and AGC formats
+/// Unified sequence index that supports FASTA, AGC and FASTGA GDB formats
 #[derive(Debug)]
 pub enum SequenceIndex {
     Fasta(FastaIndex),
     Agc(AgcIndex),
+    Gdb(GdbIndex),
 }
 
 impl SequenceIndex {
@@ -53,7 +55,7 @@ impl SequenceIndex {
 
         if !all_same_type {
             return Err(
-                "Mixed file types not supported. All files must be the same format (all .fa/.fasta/.fna or all .agc)"
+                "Mixed file types not supported. All files must be the same format (all .fa/.fasta/.fna, all .agc, or one .1gdb)"
                     .to_string(),
             );
         }
@@ -66,6 +68,10 @@ impl SequenceIndex {
             "agc" => {
                 let index = AgcIndex::build(files)?;
                 Ok(SequenceIndex::Agc(index))
+            }
+            "1gdb" | "gdb" => {
+                let index = GdbIndex::build(files)?;
+                Ok(SequenceIndex::Gdb(index))
             }
             _ => {
                 // Default to FASTA for unknown extensions or no extension
@@ -84,6 +90,7 @@ impl SequenceIndex {
         match self {
             SequenceIndex::Fasta(index) => index.fetch_sequence(seq_name, start, end),
             SequenceIndex::Agc(index) => index.fetch_sequence(seq_name, start, end),
+            SequenceIndex::Gdb(index) => index.fetch_sequence(seq_name, start, end),
         }
     }
 

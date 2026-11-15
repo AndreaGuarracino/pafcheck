@@ -22,7 +22,7 @@ fn main() {
             Arg::with_name("sequence_files")
                 .long("sequence-files")
                 .value_name("FILE")
-                .help("Sequence files (FASTA or AGC format, repeatable)")
+                .help("Sequence files (FASTA, AGC, or FASTGA .1gdb format, repeatable)")
                 .takes_value(true)
                 .multiple_values(true)
                 .required(false),
